@@ -20,8 +20,9 @@ use super::{ColumnarValue, ScalarValue};
 use crate::error::{DataFusionError, Result};
 use arrow::array::{Float32Array, Float64Array};
 use arrow::datatypes::DataType;
+use lazy_static::lazy_static;
 use rand::{thread_rng, Rng};
-use statrs::function::factorial;
+use std::f64::INFINITY as INF;
 use std::iter;
 use std::sync::Arc;
 
@@ -103,6 +104,41 @@ math_unary_function!("ln", ln);
 math_unary_function!("log2", log2);
 math_unary_function!("log10", log10);
 
+/// The maximum factorial representable
+/// by a 64-bit floating point without
+/// overflowing
+pub const MAX_FACTORIAL: usize = 170;
+
+/// Computes the factorial function `x -> x!` for
+/// `170 >= x >= 0`. All factorials larger than `170!`
+/// will overflow an `f64`.
+///
+/// # Remarks
+///
+/// Returns `f64::INFINITY` if `x > 170`
+pub fn factorial_impl(x: u64) -> f64 {
+    let x = x as usize;
+    FCACHE.get(x).map_or(INF, |&fac| fac)
+}
+
+// Initialization for pre-computed cache of 171 factorial
+// values 0!...170!
+lazy_static! {
+    static ref FCACHE: [f64; MAX_FACTORIAL + 1] = {
+        let mut fcache = [1.0; MAX_FACTORIAL + 1];
+        fcache
+            .iter_mut()
+            .enumerate()
+            .skip(1)
+            .fold(1.0, |acc, (i, elt)| {
+                let fac = acc * i as f64;
+                *elt = fac;
+                fac
+            });
+        fcache
+    };
+}
+
 /// factorial SQL function
 pub fn factorial(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     match &args[0] {
@@ -112,7 +148,7 @@ pub fn factorial(args: &[ColumnarValue]) -> Result<ColumnarValue> {
                 Some(array) => {
                     let res: Float64Array =
                         arrow::compute::kernels::arity::unary(array, |x| {
-                            factorial::factorial(x as u64)
+                            factorial_impl(x as u64)
                         });
                     let arc1 = Arc::new(res);
                     Ok(ColumnarValue::Array(arc1))
